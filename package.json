@@ -1,0 +1,16 @@
+{
+  "name": "roblox-donation-proxy",
+  "version": "1.0.0",
+  "description": "Proxy to fetch Roblox user gamepasses",
+  "main": "index.js",
+  "type": "commonjs",
+  "scripts": {
+    "start": "node index.js"
+  },
+  "dependencies": {
+    "cors": "^2.8.5",
+    "express": "^4.19.2",
+    "node-cache": "^5.1.2",
+    "node-fetch": "^2.6.7"
+  }
+}
