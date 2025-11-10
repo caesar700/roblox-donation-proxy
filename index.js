@@ -1,31 +1,72 @@
-import express from "express";
-import fetch from "node-fetch";
+// Roblox Gamepass Proxy - Works on Render.com
+const express = require("express");
+const fetch = require("node-fetch");
 
 const app = express();
+const PORT = process.env.PORT || 3000;
 
-// Simple endpoint for Roblox games
+// ===== Utility: Parse gamepasses from HTML =====
+function parseGamepasses(html) {
+  const regex = /\/game-pass\/(\d+)\/([^\"]+)/g;
+  const matches = [...html.matchAll(regex)];
+  return matches.map((m) => ({
+    id: Number(m[1]),
+    name: m[2].replace(/-/g, " "),
+  }));
+}
+
+// ===== Core fetcher with pagination =====
+async function fetchAllGamepasses(placeId) {
+  let startIndex = 0;
+  const maxRows = 50;
+  const allPasses = [];
+
+  while (true) {
+    const url = `https://www.roblox.com/games/getgamepassesinnerpartial?startIndex=${startIndex}&maxRows=${maxRows}&placeId=${placeId}`;
+    console.log("Fetching:", url);
+
+    const response = await fetch(url, { redirect: "follow" });
+    if (!response.ok) {
+      console.error("Request failed:", response.status, response.statusText);
+      break;
+    }
+
+    const html = await response.text();
+    const passes = parseGamepasses(html);
+    console.log(`Found ${passes.length} passes (page ${startIndex / maxRows + 1})`);
+    allPasses.push(...passes);
+
+    if (passes.length < maxRows) break; // last page
+    startIndex += maxRows;
+  }
+
+  return allPasses;
+}
+
+// ===== API endpoint =====
 app.get("/gamepasses/:placeId", async (req, res) => {
   const { placeId } = req.params;
-  const url = `https://www.roblox.com/games/getgamepassesinnerpartial?startIndex=0&maxRows=50&placeId=${placeId}`;
-  console.log("Fetching:", url);
+
   try {
-    const r = await fetch(url, { redirect: "follow" });
-    const html = await r.text();
-
-    // Parse /game-pass/{id}/{name} patterns from the HTML
-    const matches = [...html.matchAll(/\/game-pass\/(\d+)\/([^\"]+)/g)];
-    const passes = matches.map(m => ({
-      id: Number(m[1]),
-      name: m[2].replace(/-/g, " ")
-    }));
-
-    res.json({ success: true, count: passes.length, data: passes });
-  } catch (e) {
-    console.error("Error fetching:", e);
-    res.status(500).json({ success: false, error: e.toString() });
+    const passes = await fetchAllGamepasses(placeId);
+    res.json({
+      success: true,
+      placeId,
+      count: passes.length,
+      data: passes,
+    });
+  } catch (err) {
+    console.error("Error fetching:", err);
+    res.status(500).json({
+      success: false,
+      error: err.toString(),
+    });
   }
 });
 
-// Required by Render (Render assigns a random port)
-const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log(`Proxy listening on port ${PORT}`));
+// ===== Health check =====
+app.get("/", (req, res) => {
+  res.send("✅ Roblox Gamepass Proxy is running!");
+});
+
+app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
