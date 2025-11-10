@@ -1,3 +1,7 @@
+// Roblox Donation Proxy (RoProxy version)
+// Fetches player-owned gamepasses by enumerating their games via RoProxy
+// Works without Roblox API keys (as of 2025)
+
 const express = require("express");
 const cors = require("cors");
 const fetch = require("node-fetch");
@@ -7,7 +11,7 @@ const app = express();
 app.use(cors());
 const cache = new NodeCache({ stdTTL: 120, checkperiod: 60 });
 
-// Helper: fetch JSON safely
+// Helper to fetch and parse JSON safely
 async function getJSON(url) {
   const resp = await fetch(url, { redirect: "follow" });
   if (!resp.ok) {
@@ -17,42 +21,76 @@ async function getJSON(url) {
   return await resp.json();
 }
 
-// Fetch user's public on-sale gamepasses
-async function fetchGamepasses(userId) {
-  const all = [];
+// Fetch all games belonging to a user
+async function fetchUserGames(userId) {
+  const games = [];
   let cursor = null;
   let pages = 0;
-
   while (pages < 5) {
     pages++;
-    const url = `https://apis.roblox.com/marketplace-items/v1/items/users/${userId}/game-passes?limit=100${cursor ? `&cursor=${cursor}` : ""}`;
+    const url = `https://games.roproxy.com/v2/users/${userId}/games?limit=50${cursor ? `&cursor=${cursor}` : ""}`;
     const data = await getJSON(url);
-    const items = Array.isArray(data?.data) ? data.data : [];
+    const rows = Array.isArray(data?.data) ? data.data : [];
+    for (const g of rows) {
+      if (g.id) games.push(Number(g.id));
+    }
+    cursor = data?.nextPageCursor || null;
+    if (!cursor) break;
+  }
+  return games;
+}
 
-    for (const item of items) {
+// Fetch all gamepasses for a given game
+async function fetchGamePassesForGame(gameId) {
+  const passes = [];
+  let cursor = null;
+  let pages = 0;
+  while (pages < 5) {
+    pages++;
+    const url = `https://games.roproxy.com/v1/games/${gameId}/game-passes?limit=100${cursor ? `&cursor=${cursor}` : ""}`;
+    const data = await getJSON(url);
+    const rows = Array.isArray(data?.data) ? data.data : [];
+    for (const item of rows) {
       const price = Number(item.price ?? 0);
       if (price > 0 && item.isForSale !== false) {
-        all.push({
+        passes.push({
           id: Number(item.id),
           name: String(item.name ?? "GamePass"),
           price,
-          creatorId: Number(item.creator?.id ?? 0)
+          creatorId: Number(item.creator?.id ?? 0),
         });
       }
     }
-
     cursor = data?.nextPageCursor || null;
     if (!cursor) break;
+  }
+  return passes;
+}
+
+// Top-level: fetch all gamepasses owned by a user
+async function fetchAllGamepasses(userId) {
+  const all = [];
+  const games = await fetchUserGames(userId);
+  const seen = new Set();
+
+  for (const gid of games) {
+    const passes = await fetchGamePassesForGame(gid);
+    for (const p of passes) {
+      if (!seen.has(p.id)) {
+        seen.add(p.id);
+        all.push(p);
+      }
+    }
   }
 
   all.sort((a, b) => a.price - b.price);
   return all;
 }
 
-// Simple test route
+// Routes -------------------------------------------------------
+
 app.get("/health", (req, res) => res.json({ ok: true }));
 
-// Main gamepasses endpoint
 app.get("/gamepasses", async (req, res) => {
   const userId = req.query.userId;
   if (!/^\d+$/.test(userId || "")) {
@@ -64,7 +102,7 @@ app.get("/gamepasses", async (req, res) => {
   if (cached) return res.json({ data: cached, cached: true });
 
   try {
-    const data = await fetchGamepasses(userId);
+    const data = await fetchAllGamepasses(userId);
     cache.set(cacheKey, data);
     res.json({ data, cached: false });
   } catch (err) {
@@ -74,4 +112,4 @@ app.get("/gamepasses", async (req, res) => {
 });
 
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log("Proxy running on port", PORT));
+app.listen(PORT, () => console.log("RoProxy Donation Proxy running on port", PORT));
